@@ -15,7 +15,7 @@ from keras.layers import Dense
 import time
 import matplotlib.pyplot as plt
 
-## create environment
+## create environment (FrozenLake with is_slippery=False.)
 from gym.envs.registration import register
 register(
     id='FrozenLakeNotSlippery-v0',
@@ -24,14 +24,20 @@ register(
 )
 
 env = gym.make('FrozenLakeNotSlippery-v0')
+# env = gym.make('FrozenLake-v1')
 
-# Instantiate the Environment.
-#env = gym.make('FrozenLake-v0')
+#
+# Environment Notes:
+# You cannot fall off the edge.
+# If you fall into a hole, the game ends.
+#
+LEFT = 0
+DOWN = 1
+RIGHT = 2
+UP = 3
 
 # To check all environments present in OpenAI
 # print(envs.registry.all())
-
-env.render()
 
 num_episodes = 1000
 steps_total = []
@@ -57,8 +63,8 @@ egreedy_decay = 0.999
 # NN Model
 model = Sequential()
 model.add(InputLayer(batch_input_shape=(1, env.observation_space.n)))
-# model.add(Dense(20, activation='relu', kernel_initializer='zeros', bias_initializer='zeros'))
-model.add(Dense(env.action_space.n, activation='linear'))
+model.add(Dense(20, activation='relu'))
+model.add(Dense(env.action_space.n, activation='sigmoid'))
 model.compile(loss='mse', optimizer='adam', metrics=['mae'])
 
 for i_episode in range(num_episodes):
@@ -79,7 +85,6 @@ for i_episode in range(num_episodes):
             egreedy *= egreedy_decay
 
         new_state, reward, done, info = env.step(action)
-        print(f'state={state} action={action} ==> new_state={new_state}')
 
         # Filling the Q Table
         if done and reward < 1:
@@ -93,8 +98,8 @@ for i_episode in range(num_episodes):
         target_vector[action] = target
 
         model.fit(
-          np.identity(env.observation_space.n)[state:state + 1], 
-          target_vector.reshape(-1, env.action_space.n), 
+          np.identity(env.observation_space.n)[state:state + 1],
+          target_vector.reshape(-1, env.action_space.n),
           epochs=1, verbose=0)
 
         # Setting new state for next action
@@ -105,13 +110,12 @@ for i_episode in range(num_episodes):
             rewards_total.append(reward)
             egreedy_total.append(egreedy)
             if reward < 1.0:
-                print('dropped off!')
+                print('dropped off')
             else:
-                print('reached the goal!')
+                print('reached the goal')
 
             if i_episode % 10 == 0:
                 print('Episode: {} Reward: {} Steps Taken: {}'.format(i_episode,reward, step))
-                print('=========================================================')
             break
 
 model.save('model')
