@@ -1,84 +1,118 @@
 ##
-# Q-function example 
+# Q-function example with FrozenLake
 #
-# source: https://medium.com/emergent-future/simple-reinforcement-learning-with-tensorflow-part-0-q-learning-with-tables-and-neural-networks-d195264329d0
+# Taken from `https://www.kaggle.com/sarjit07/reinforcement-learning-using-q-table-frozenlake`
 ##
 
 import gym
+import torch
 import numpy as np
-import random
-# The provided example uses tensorflow v1.
-import tensorflow.compat.v1 as tf
+import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import InputLayer
+from keras.layers import Dense
+
+import time
 import matplotlib.pyplot as plt
 
-tf.disable_v2_behavior()
+## create environment
+from gym.envs.registration import register
+register(
+    id='FrozenLakeNotSlippery-v0',
+    entry_point='gym.envs.toy_text:FrozenLakeEnv',
+    kwargs={'map_name' : '4x4', 'is_slippery': False},
+)
 
-env = gym.make('FrozenLake-v1')
+env = gym.make('FrozenLakeNotSlippery-v0')
 
-tf.reset_default_graph()
+# Instantiate the Environment.
+#env = gym.make('FrozenLake-v0')
 
-# These lines establish the feed-forward part of the network used to choose actions
-inputs1 = tf.placeholder(shape=[1,16], dtype=tf.float32)
-W = tf.Variable(tf.random_uniform([16,4], 0, 0.01))
-Qout = tf.matmul(inputs1, W)
-predict = tf.argmax(Qout, 1)
+# To check all environments present in OpenAI
+# print(envs.registry.all())
 
-# Below we obtain the loss by taking the sum of squares difference between the target and prediction Q values.
-nextQ = tf.placeholder(shape=[1,4], dtype=tf.float32)
-loss = tf.reduce_sum(tf.square(nextQ - Qout))
-trainer = tf.train.GradientDescentOptimizer(learning_rate=0.1)
-updateModel = trainer.minimize(loss)
-init = tf.initialize_all_variables()
+env.render()
 
-# Set learning parameters
-y = .99
-e = 0.1
-numEpisodes = 2000
+num_episodes = 1000
+steps_total = []
+rewards_total = []
+egreedy_total = []
 
-# create lists to contain total rewards and steps per episode
-jList = []
-rList = []
-with tf.Session() as sess:
-    sess.run(init)
-    for i in range(numEpisodes):
-        print(f'at episode {i}/{numEpisodes}.')
-        # Reset environment and get first new observation
-        s = env.reset()
-        rAll = 0
-        d = False
-        j = 0
+# PARAMS 
 
-        # The Q-Network
-        while j < 99:
-            j+=1
+# Discount on reward
+gamma = 0.95
 
-            # Choose an action by greedily (with e chance of random action) from the Q-network
-            a,allQ = sess.run([predict,Qout], feed_dict={inputs1:np.identity(16)[s:s+1]})
-            if np.random.rand(1) < e:
-                a[0] = env.action_space.sample()
+# Factor to balance the ratio of action taken based on past experience to current situtation
+learning_rate = 0.9
 
-            # Get new state and reward from environment
-            s1,r,d,_ = env.step(a[0])
+# exploit vs explore to find action
+# Start with 70% random actions to explore the environment
+# And with time, using decay to shift to more optimal actions learned from experience
 
-            # Obtain the Q' values by feeding the new state through our network
-            Q1 = sess.run(Qout, feed_dict={inputs1:np.identity(16)[s1:s1+1]})
+egreedy = 0.7
+egreedy_final = 0.1
+egreedy_decay = 0.999
 
-            # Obtain maxQ' and set our target value for chosen action.
-            maxQ1 = np.max(Q1)
-            targetQ = allQ
-            targetQ[0,a[0]] = r + y*maxQ1
+# NN Model
+model = Sequential()
+model.add(InputLayer(batch_input_shape=(1, env.observation_space.n)))
+# model.add(Dense(20, activation='relu', kernel_initializer='zeros', bias_initializer='zeros'))
+model.add(Dense(env.action_space.n, activation='linear'))
+model.compile(loss='mse', optimizer='adam', metrics=['mae'])
 
-            # Train our network using target and predicted Q values
-            _,W1 = sess.run([updateModel,W], feed_dict={inputs1:np.identity(16)[s:s+1], nextQ:targetQ})
-            rAll += r
-            s = s1
-            if d == True:
-                # Reduce chance of random action as we train the model.
-                e = 1. / ((i/50) + 10)
-                break
+for i_episode in range(num_episodes):
 
-        jList.append(j)
-        rList.append(rAll)
+    # resets the environment
+    state = env.reset()
+    step = 0
 
-print("Percent of succesful episodes: " + str(sum(rList)/numEpisodes) + "%")
+    while True:
+        step += 1
+
+        if np.random.random() < egreedy:
+            action = np.random.randint(0, env.action_space.n)
+        else:
+            action = np.argmax( model.predict(np.identity(env.observation_space.n)[state:state + 1]) )
+
+        if egreedy > egreedy_final:
+            egreedy *= egreedy_decay
+
+        new_state, reward, done, info = env.step(action)
+        print(f'state={state} action={action} ==> new_state={new_state}')
+
+        # Filling the Q Table
+        if done and reward < 1:
+            target = 0
+        else:
+            target = reward + gamma * np.max( model.predict(np.identity(env.observation_space.n)[new_state:new_state + 1]))
+
+        target_vector = model.predict(np.identity(env.observation_space.n)[state:state + 1])[0]
+
+        print(f'state={state} action={action} target={target}')
+        target_vector[action] = target
+
+        model.fit(
+          np.identity(env.observation_space.n)[state:state + 1], 
+          target_vector.reshape(-1, env.action_space.n), 
+          epochs=1, verbose=0)
+
+        # Setting new state for next action
+        state = new_state
+
+        if done:
+            steps_total.append(step)
+            rewards_total.append(reward)
+            egreedy_total.append(egreedy)
+            if reward < 1.0:
+                print('dropped off!')
+            else:
+                print('reached the goal!')
+
+            if i_episode % 10 == 0:
+                print('Episode: {} Reward: {} Steps Taken: {}'.format(i_episode,reward, step))
+                print('=========================================================')
+            break
+
+model.save('model')
 
